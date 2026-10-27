@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -83,6 +84,37 @@ func TestReviewerQuotaFallbackPreservesFailureBoundaries(t *testing.T) {
 		second := &roleRecorder{name: "second"}
 		if _, err := NewFallback([]Agent{first, second}, WithReviewerQuotaFallback()).Run(ctx, RunOpts{}); err == nil || len(second.calls) != 0 {
 			t.Fatalf("error = %v, next reviewer calls = %d", err, len(second.calls))
+		}
+	})
+}
+
+func TestReviewerQuotaFallbackHonorsOpenCodeReplaySafety(t *testing.T) {
+	for name, failure := range map[string]error{
+		"typed tool activity":         &opencodeMessageFailure{name: "APIError", message: "insufficient_quota", toolActivity: true},
+		"wrapped typed tool activity": fmt.Errorf("review: %w", &opencodeMessageFailure{name: "APIError", message: "insufficient_quota", toolActivity: true}),
+		"tool marker":                 errors.Join(quotaError("opencode"), errOpencodeToolsAlreadyRan),
+		"unknown marker":              errors.Join(quotaError("opencode"), errOpencodeToolActivityUnknown),
+	} {
+		for _, purpose := range []string{"review", "review-coverage"} {
+			t.Run(name+"/"+purpose, func(t *testing.T) {
+				first := &quotaTestAgent{name: "opencode", run: func(RunOpts) (*Result, error) { return nil, failure }}
+				second := &roleRecorder{name: "second"}
+				ag := WithReviewAgents(&roleRecorder{name: "writer"}, NewFallback([]Agent{first, second}, WithReviewerQuotaFallback()), nil)
+				_, err := ag.Run(context.Background(), RunOpts{Purpose: purpose})
+				if !errors.Is(err, failure) || first.calls != 1 || len(second.calls) != 0 {
+					t.Fatalf("error = %v, calls = %d/%d", err, first.calls, len(second.calls))
+				}
+			})
+		}
+	}
+	t.Run("proven no tools", func(t *testing.T) {
+		first := &quotaTestAgent{name: "opencode", run: func(RunOpts) (*Result, error) {
+			return nil, &opencodeMessageFailure{name: "APIError", message: "insufficient_quota"}
+		}}
+		second := &roleRecorder{name: "second"}
+		_, err := NewFallback([]Agent{first, second}, WithReviewerQuotaFallback()).Run(context.Background(), RunOpts{})
+		if err != nil || len(second.calls) != 1 {
+			t.Fatalf("error = %v, next calls = %d", err, len(second.calls))
 		}
 	})
 }

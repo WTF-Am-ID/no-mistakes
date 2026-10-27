@@ -358,6 +358,7 @@ func newPipelineAgent(ctx context.Context, cfg *config.Config, evidenceRoot stri
 
 func newReviewRoleAgent(ctx context.Context, cfg *config.Config, entry config.ReviewAgent, evidenceRoot string, lookPath func(string) (string, error), environment runenv.Overlay) (agent.Agent, error) {
 	var created []agent.Agent
+	var models []string
 	for _, candidate := range append([]config.ReviewAgent{entry}, entry.Fallback...) {
 		roleConfig := cfg.ForReviewAgent(candidate)
 		roleConfig.QuotaRouting.Enabled = false
@@ -369,11 +370,12 @@ func newReviewRoleAgent(ctx context.Context, cfg *config.Config, entry config.Re
 			return nil, err
 		}
 		created = append(created, next)
+		models = append(models, roleConfig.AgentProfileFor(candidate.Agent).Model)
 	}
 	if len(entry.Fallback) == 0 {
 		return created[0], nil
 	}
-	return agent.NewFallback(created, agent.WithReviewerQuotaFallback()), nil
+	return agent.NewFallback(created, agent.WithReviewerQuotaFallback(models...)), nil
 }
 
 func newConfiguredAgent(ctx context.Context, cfg *config.Config, evidenceRoot string, lookPath func(string) (string, error), environment runenv.Overlay, quota *quotarouting.Record) (agent.Agent, *quotarouting.Record, error) {

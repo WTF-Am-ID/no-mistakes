@@ -18,6 +18,7 @@ type fallbackAgent struct {
 	freshSession      atomic.Bool
 	reviewerQuotaOnly bool
 	exhausted         atomic.Bool
+	configuredModels  []string
 }
 
 // FallbackOption customizes a fallback chain.
@@ -26,10 +27,11 @@ type FallbackOption func(*fallbackAgent)
 // WithReviewerQuotaFallback enables an operator-owned reviewer chain. Unlike
 // general fallback, it advances only on recognized quota exhaustion and never
 // retries an exhausted chain or changes the run's primary quota-routing record.
-func WithReviewerQuotaFallback() FallbackOption {
+func WithReviewerQuotaFallback(models ...string) FallbackOption {
 	return func(f *fallbackAgent) {
 		f.quotaSwitch = true
 		f.reviewerQuotaOnly = true
+		f.configuredModels = append([]string(nil), models...)
 	}
 }
 
@@ -153,6 +155,9 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, 
 		}
 		sessionDropped = a.freshSession.Swap(false) || sessionDropped
 		currentOpts := opts
+		if start+i < len(a.configuredModels) {
+			currentOpts.ConfiguredModel = a.configuredModels[start+i]
+		}
 		if currentOpts.Session != nil {
 			if currentOpts.Session.ID != "" {
 				if sessionDropped || current != sessionAgent {
@@ -202,7 +207,7 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, 
 		// meaningfully. Preserve the current adapter's report for the caller's
 		// timeout diagnostic, but do not announce or instrument an attempt that
 		// will inherit an already-dead context.
-		if context.Cause(ctx) != nil {
+		if context.Cause(ctx) != nil || opencodeReplayUnsafe(err) {
 			return result, err
 		}
 		if i == len(candidates)-1 {
@@ -221,7 +226,11 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, 
 				}
 			}
 			if a.reviewerQuotaOnly {
-				emitAgentFallback(opts, current.Name(), next.Name(), err)
+				emitAgentControl(opts, LifecycleEvent{
+					Agent:   current.Name(),
+					Phase:   LifecyclePhaseFallback,
+					Message: fmt.Sprintf("agent %s failed (%s); falling back to %s", a.candidateIdentity(start+i), fallbackReason(err), a.candidateIdentity(start+i+1)),
+				})
 			} else {
 				emitAgentQuotaSwitch(opts, current.Name(), next.Name(), err)
 			}
@@ -236,6 +245,14 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, 
 		return result, err
 	}
 	return nil, lastErr
+}
+
+func (a *fallbackAgent) candidateIdentity(index int) string {
+	name := a.agents[index].Name()
+	if index < len(a.configuredModels) && a.configuredModels[index] != "" {
+		return fmt.Sprintf("%s (configured model %s)", name, a.configuredModels[index])
+	}
+	return name
 }
 
 func (a *fallbackAgent) Close() error {

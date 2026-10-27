@@ -80,22 +80,24 @@ func TestPipelineReviewRoleFailsClosed(t *testing.T) {
 func TestPipelineReviewerFallsBackOnInvocationQuota(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "pi")
-	const response = `{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"reviewed"}]}]}`
-	script := "#!/bin/sh\ncat >/dev/null\ncase \"$*\" in *'--model exhausted'*) echo 'quota exceeded' >&2; exit 1;; esac\nprintf '%s\\n' '" + response + "'\n"
+	const response = `{"type":"agent_end","messages":[{"role":"assistant","model":"reported-available","provider":"served-two","content":[{"type":"text","text":"reviewed"}]}]}`
+	const refusal = `{"type":"message_end","message":{"role":"assistant","model":"reported-exhausted","provider":"served-one","stopReason":"error","errorMessage":"insufficient_quota"}}`
+	script := "#!/bin/sh\ncat >/dev/null\ncase \"$*\" in *'--model provider-one/exhausted'*) printf '%s\\n' '" + refusal + "'; exit 0;; esac\nprintf '%s\\n' '" + response + "'\n"
 	if runtime.GOOS == "windows" {
 		bin += ".cmd"
-		script = "@echo off\r\nmore > nul\r\necho %* | findstr /C:\"--model exhausted\" > nul\r\nif not errorlevel 1 (\r\necho quota exceeded 1>&2\r\nexit /b 1\r\n)\r\necho " + response + "\r\n"
+		script = "@echo off\r\nmore > nul\r\necho %* | findstr /C:\"--model provider-one/exhausted\" > nul\r\nif not errorlevel 1 (\r\necho " + refusal + "\r\nexit /b 0\r\n)\r\necho " + response + "\r\n"
 	}
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	global, err := config.LoadGlobalFromBytes([]byte(`agent: pi
 review_agents:
-  reviewer:
+  reviewer: &reviewer
     agent: pi
-    model: exhausted
+    model: provider-one/exhausted
     fallback:
-      - {agent: pi, model: available}
+      - {agent: pi, model: provider-two/available}
+  reviewer_after_round: *reviewer
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -109,17 +111,39 @@ review_agents:
 	}
 	defer ag.Close()
 	var attempts []agent.Attempt
-	for _, purpose := range []string{"review", "review-coverage"} {
-		result, err := ag.Run(context.Background(), agent.RunOpts{
-			Purpose: purpose, Prompt: "review", CWD: dir,
-			OnAttempt: func(attempt agent.Attempt) { attempts = append(attempts, attempt) },
-		})
-		if err != nil || result == nil || result.Text != "reviewed" {
-			t.Fatalf("%s result = %+v, error = %v", purpose, result, err)
+	var fallbacks []agent.LifecycleEvent
+	for _, round := range []int{1, 2} {
+		for _, purpose := range []string{"review", "review-coverage"} {
+			result, err := ag.Run(context.Background(), agent.RunOpts{
+				Purpose: purpose, Round: round, Prompt: "review", CWD: dir,
+				OnAttempt: func(attempt agent.Attempt) { attempts = append(attempts, attempt) },
+				OnLifecycle: func(event agent.LifecycleEvent) {
+					if event.Phase == agent.LifecyclePhaseFallback {
+						fallbacks = append(fallbacks, event)
+					}
+				},
+			})
+			if err != nil || result == nil || result.Text != "reviewed" {
+				t.Fatalf("%s result = %+v, error = %v", purpose, result, err)
+			}
 		}
 	}
-	if len(attempts) != 3 || attempts[0].Err == nil || attempts[1].Err != nil || attempts[2].Err != nil {
-		t.Fatalf("attempts = %+v, want one quota refusal followed by two successful reviews", attempts)
+	if len(attempts) != 6 || len(fallbacks) != 2 {
+		t.Fatalf("attempts = %+v, fallbacks = %+v", attempts, fallbacks)
+	}
+	for i, attempt := range attempts {
+		model, served, provider := "provider-two/available", "reported-available", "served-two"
+		if i%3 == 0 {
+			model, served, provider = "provider-one/exhausted", "reported-exhausted", "served-one"
+		}
+		if attempt.Agent != "pi" || attempt.ConfiguredModel != model || attempt.Result == nil || attempt.Result.Model != served || attempt.Result.ModelProvider != provider || (attempt.Err != nil) != (i%3 == 0) {
+			t.Fatalf("attempt %d = %+v, result = %+v", i, attempt, attempt.Result)
+		}
+	}
+	for _, event := range fallbacks {
+		if event.Agent != "pi" || !strings.Contains(event.Message, "pi (configured model provider-one/exhausted)") || !strings.Contains(event.Message, "pi (configured model provider-two/available)") {
+			t.Fatalf("fallback lost configured identities: %+v", event)
+		}
 	}
 }
 
