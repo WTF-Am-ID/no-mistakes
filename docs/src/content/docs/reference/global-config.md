@@ -411,11 +411,12 @@ Only recognized invocation-time provider quota exhaustion advances this list.
 Launch errors, transient failures, invalid review output, timeouts and cancellation
 do not. Each replacement receives the complete review prompt without a session,
 inside the invocation's existing timeout. Subsequent review and coverage turns
-stay on the selected reviewer rather than retrying exhausted candidates. If all
-configured reviewers exhaust their quota, review fails without approval. The
-invocation records store each candidate's configured model, including its provider
-prefix, separately from the model and provider reported by the adapter. The
-fallback log names both configured candidates, including same-harness profiles.
+using that role stay on its selected reviewer rather than retrying exhausted
+candidates. The base and later-round reviewer roles have separate fallback chains.
+If all configured reviewers exhaust their quota, review fails without approval.
+The fallback log names both configured candidates, including same-harness profiles.
+See [local invocation evidence](/no-mistakes/reference/environment/#what-stays-local-and-what-leaves-the-machine)
+for the recorded identities.
 An OpenCode turn that ran tools, or whose tool activity is unknown, cannot fall
 back to a fresh reviewer session.
 These candidates are independent reviewer instances and never fall back to the
