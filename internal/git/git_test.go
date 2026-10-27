@@ -472,3 +472,46 @@ func TestWorktreeAddRemoveOnBareRepoUnderSafeBareRepositoryExplicit(t *testing.T
 		t.Fatalf("worktree remove from bare repo: %v", err)
 	}
 }
+
+func TestFetchRemoteBranchToPrivateRefPreservesSharedRefs(t *testing.T) {
+	for _, named := range []bool{true, false} {
+		name := "url"
+		if named {
+			name = "named remote"
+		}
+		t.Run(name, func(t *testing.T) {
+			source := initTestRepo(t)
+			target := t.TempDir()
+			run(t, source, "git", "clone", source, target)
+			run(t, target, "git", "fetch", "origin")
+			before := run(t, target, "git", "show-ref")
+			fetchPath := filepath.Join(target, ".git", "FETCH_HEAD")
+			fetchBefore, err := os.ReadFile(fetchPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			branch := run(t, source, "git", "symbolic-ref", "--short", "HEAD")
+			run(t, source, "git", "commit", "--allow-empty", "-m", "advance trusted branch")
+			want := run(t, source, "git", "rev-parse", "HEAD")
+			remote := source
+			if named {
+				remote = "origin"
+			}
+			privateRef := "refs/no-mistakes/test-fetch"
+			if err := FetchRemoteBranchToPrivateRef(context.Background(), target, remote, branch, privateRef); err != nil {
+				t.Fatal(err)
+			}
+			if got := run(t, target, "git", "rev-parse", privateRef); got != want {
+				t.Fatalf("private ref=%s, want %s", got, want)
+			}
+			run(t, target, "git", "update-ref", "-d", privateRef)
+			if after := run(t, target, "git", "show-ref"); after != before {
+				t.Fatalf("private fetch moved shared refs: before=%s after=%s", before, after)
+			}
+			fetchAfter, err := os.ReadFile(fetchPath)
+			if err != nil || string(fetchAfter) != string(fetchBefore) {
+				t.Fatalf("private fetch changed FETCH_HEAD: %s %v", fetchAfter, err)
+			}
+		})
+	}
+}

@@ -226,6 +226,7 @@ type GetActiveRunParams struct {
 // leaves the new run to perform fresh inference.
 // ClosingIssueRefs are merged with the selected run's persisted references.
 type RerunParams struct {
+	FreshLaunch        bool                      `json:"fresh_launch,omitempty"`
 	ReviewerProfile    *agentcfg.ReviewerProfile `json:"reviewer_profile,omitempty"`
 	VerificationPlanID string                    `json:"verification_plan_id,omitempty"`
 	PiProfile          *agentcfg.PiProfile       `json:"pi_profile,omitempty"`
@@ -323,7 +324,13 @@ type GateContextParams struct {
 // AdmitPushParams asks whether a local receive hook's authenticated process
 // ancestry is allowed to mutate a managed gate ref.
 type AdmitPushParams struct {
-	Gate string `json:"gate"`
+	Gate            string                    `json:"gate"`
+	ReviewerProfile *agentcfg.ReviewerProfile `json:"reviewer_profile,omitempty"`
+}
+
+type ResolveReviewerProfileParams struct {
+	RepoID          string                    `json:"repo_id"`
+	ReviewerProfile *agentcfg.ReviewerProfile `json:"reviewer_profile"`
 }
 
 // HealthParams has no fields but exists for consistency.

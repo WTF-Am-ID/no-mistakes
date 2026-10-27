@@ -1313,12 +1313,18 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if strings.TrimSpace(p.Gate) == "" {
 			return nil, fmt.Errorf("gate path is required")
 		}
-		if _, err := ownedGateRepoID(mgr.paths, p.Gate); err != nil {
+		repoID, err := ownedGateRepoID(mgr.paths, p.Gate)
+		if err != nil {
 			return nil, err
 		}
 		result, err := classify(ctx, "", false, true)
 		if err != nil {
 			return nil, err
+		}
+		if !result.Nested && p.ReviewerProfile != nil {
+			if _, err := mgr.resolveReviewerProfile(ctx, repoID, p.ReviewerProfile); err != nil {
+				return nil, err
+			}
 		}
 		return &ipc.AdmitPushResult{Context: gateContextResult(result)}, nil
 	})
@@ -1426,15 +1432,11 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		return cfg.ResolvePiProfile(&request)
 	})
 	srv.Handle(ipc.MethodResolveReviewerProfile, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		var request agentcfg.ReviewerProfile
+		var request ipc.ResolveReviewerProfileParams
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, fmt.Errorf("invalid reviewer selection")
 		}
-		cfg, err := config.LoadGlobal(mgr.paths.ConfigFile())
-		if err != nil {
-			return nil, err
-		}
-		return cfg.ResolveReviewerProfile(&request)
+		return mgr.resolveReviewerProfile(ctx, request.RepoID, request.ReviewerProfile)
 	})
 
 	srv.Handle(ipc.MethodStartFreshRun, func(ctx context.Context, params json.RawMessage) (interface{}, error) {
@@ -1460,7 +1462,7 @@ func registerHandlers(srv *ipc.Server, mgr *RunManager, d *db.DB, shutdown func(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		runID, err := mgr.HandleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent, p.PRBaseBranch, p.OmitIntent, p.CallerHeadSHA, p.VerificationPlanID, p.ClosingIssueRefs, p.PiProfile, p.ReviewerProfile)
+		runID, err := mgr.handleRerun(ctx, p.RepoID, p.Branch, p.PreviousRunID, p.SkipSteps, p.Intent, p.PRBaseBranch, p.OmitIntent, p.CallerHeadSHA, p.VerificationPlanID, p.ClosingIssueRefs, p.FreshLaunch, p.PiProfile, p.ReviewerProfile)
 		if err != nil {
 			return nil, err
 		}

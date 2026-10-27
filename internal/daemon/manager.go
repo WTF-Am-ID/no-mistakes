@@ -1199,6 +1199,10 @@ func receiptForRun(run *db.Run, created bool) (ipc.LaunchReceipt, error) {
 // A supplied clean caller head must match the selected head before any run
 // starts or is superseded. It never changes head selection.
 func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch, previousRunID string, skipSteps []types.StepName, intent, prBaseBranch string, omitIntent bool, callerHeadSHA, planID string, closingIssues []string, profiles ...agentcfg.RunSelection) (string, error) {
+	return m.handleRerun(ctx, repoID, branch, previousRunID, skipSteps, intent, prBaseBranch, omitIntent, callerHeadSHA, planID, closingIssues, false, profiles...)
+}
+
+func (m *RunManager) handleRerun(ctx context.Context, repoID, branch, previousRunID string, skipSteps []types.StepName, intent, prBaseBranch string, omitIntent bool, callerHeadSHA, planID string, closingIssues []string, freshLaunch bool, profiles ...agentcfg.RunSelection) (string, error) {
 	repo, err := m.db.GetRepo(repoID)
 	if err != nil {
 		return "", fmt.Errorf("get repo: %w", err)
@@ -1283,7 +1287,7 @@ func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch, previousRu
 	// explicit request is added to, never replaces, what the selected run carried.
 	closingIssues = append(append([]string(nil), selectedRun.ClosingIssueRefs...), closingIssues...)
 	// A rerun inherits the reviewer unless the caller explicitly replaces it.
-	if agentcfg.OptionalReviewerProfile(profiles) == nil && selectedRun.ReviewerProfile != nil {
+	if !freshLaunch && agentcfg.OptionalReviewerProfile(profiles) == nil && selectedRun.ReviewerProfile != nil {
 		profiles = append(profiles, agentcfg.InheritReviewerProfile(selectedRun.ReviewerProfile))
 	}
 	return m.startRunWithIntentSource(ctx, repo, branch, headSHA, baseSHA, "rerun", skipSteps, intent, intentSource, storedPRBaseBranch, selectedRun.OmitIntent || omitIntent, inheritablePRURL(selectedRun), planID, closingIssues, profiles...)

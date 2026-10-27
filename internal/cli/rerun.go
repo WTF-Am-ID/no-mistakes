@@ -67,7 +67,7 @@ func newRerunCmd() *cobra.Command {
 					return fmt.Errorf("connect to daemon: %w", err)
 				}
 				defer client.Close()
-				reviewer, err = resolveReviewer(client, reviewer)
+				reviewer, err = resolveReviewer(client, repo.ID, reviewer)
 				if err != nil {
 					return err
 				}

@@ -47,13 +47,13 @@ func reviewerFromFlags(cmd *cobra.Command) (*agentcfg.ReviewerProfile, error) {
 	return p, p.ValidateRequest()
 }
 
-func resolveReviewer(client *ipc.Client, request *agentcfg.ReviewerProfile) (*agentcfg.ReviewerProfile, error) {
+func resolveReviewer(client *ipc.Client, repoID string, request *agentcfg.ReviewerProfile) (*agentcfg.ReviewerProfile, error) {
 	if request == nil {
 		return nil, nil
 	}
 	var resolved agentcfg.ReviewerProfile
 	// Distinct RPC refuses old daemons before any push can take custody.
-	if err := client.Call(ipc.MethodResolveReviewerProfile, request, &resolved); err != nil {
+	if err := client.Call(ipc.MethodResolveReviewerProfile, &ipc.ResolveReviewerProfileParams{RepoID: repoID, ReviewerProfile: request}, &resolved); err != nil {
 		return nil, fmt.Errorf("resolve reviewer selection: %w", err)
 	}
 	if err := resolved.Validate(); err != nil {

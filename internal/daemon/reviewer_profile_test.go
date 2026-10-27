@@ -188,3 +188,111 @@ func TestReviewerSelectionRetryKeepsResolvedProfile(t *testing.T) {
 		t.Fatalf("retry replaced reviewer: %+v", run)
 	}
 }
+
+func TestReviewerSelectionFreshLaunchDoesNotInherit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fresh bool
+		pi    *agentcfg.PiProfile
+		want  string
+	}{
+		{name: "explicit rerun", want: "openai/old-reviewer"},
+		{name: "fresh global", fresh: true, want: "openai/default"},
+		{name: "fresh Pi", fresh: true, pi: &agentcfg.PiProfile{Model: "openai/new-writer", Effort: agentcfg.EffortHigh}, want: "openai/new-writer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "argv.log")
+			bin := writeCapturingPiAgent(t, t.TempDir(), capture)
+			p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return []pipeline.Step{&reviewRoleProbeStep{}} })
+			if err := os.WriteFile(p.ConfigFile(), []byte("agent: pi\nagent_path_override:\n  pi: "+bin+"\nagent_config:\n  pi: {model: openai/default, effort: low}\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			repo, head := setupTestGitRepo(t, p, d, "fresh-reviewer")
+			pin := &agentcfg.ReviewerProfile{Agent: types.AgentPi, Model: "openai/old-reviewer", Effort: agentcfg.EffortHigh}
+			previous, err := d.InsertRunWithIntentAndLaunchNonce(repo.ID, "main", head, head, nil, "", "", "", "", false, nil, pin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := d.UpdateRunStatus(previous.ID, types.RunCompleted); err != nil {
+				t.Fatal(err)
+			}
+			client, err := ipc.Dial(p.Socket())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			var result ipc.RerunResult
+			if err := client.Call(ipc.MethodRerun, &ipc.RerunParams{RepoID: repo.ID, Branch: "main", CallerHeadSHA: head, FreshLaunch: tc.fresh, PiProfile: tc.pi}, &result); err != nil {
+				t.Fatal(err)
+			}
+			run := waitForRunTerminalState(t, d, result.RunID)
+			if run.Status != types.RunCompleted || tc.fresh && run.ReviewerProfile != nil || !tc.fresh && (run.ReviewerProfile == nil || *run.ReviewerProfile != *pin) {
+				t.Fatalf("reviewer inheritance: %+v", run)
+			}
+			args, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(args), "--model "+tc.want+" ") || tc.fresh && strings.Contains(string(args), pin.Model) {
+				t.Fatalf("reviewer invocation: %s", args)
+			}
+		})
+	}
+}
+
+func TestReviewerSelectionPrePushResolutionAndAdmission(t *testing.T) {
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step { return []pipeline.Step{&mockPassStep{name: types.StepReview}} })
+	repo, _ := setupTestGitRepo(t, p, d, "reviewer-admission")
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	pin := &agentcfg.ReviewerProfile{Agent: types.AgentCodex, Model: "reviewer", Effort: agentcfg.EffortHigh}
+	for _, tc := range []struct {
+		name, trusted, binary, wantErr string
+		brokenFetch                    bool
+	}{
+		{name: "missing binary", binary: filepath.Join(t.TempDir(), "missing-codex"), wantErr: "reviewer unavailable"},
+		{name: "available binary", binary: writeMockClaude(t, t.TempDir())},
+		{name: "trusted policy", trusted: "disable_project_settings: true\n", binary: writeMockClaude(t, t.TempDir())},
+		{name: "broken trusted policy", trusted: "disable_project_settings: invalid\n", binary: writeMockClaude(t, t.TempDir()), wantErr: "config"},
+		{name: "unreadable trusted branch", binary: writeMockClaude(t, t.TempDir()), brokenFetch: true, wantErr: "failed to fetch trusted default branch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.brokenFetch {
+				gitCmd(t, p.RepoDir(repo.ID), "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-origin"))
+			}
+			if tc.trusted != "" {
+				commitDefaultBranchConfig(t, repo.WorkingPath, tc.trusted)
+			}
+			if err := os.WriteFile(p.ConfigFile(), []byte("agent: codex\nagent_path_override:\n  codex: "+tc.binary+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			before := gitOutput(t, p.RepoDir(repo.ID), "show-ref")
+			for _, admission := range []bool{false, true} {
+				var callErr error
+				if admission {
+					var result ipc.AdmitPushResult
+					callErr = client.Call(ipc.MethodAdmitPush, &ipc.AdmitPushParams{Gate: p.RepoDir(repo.ID), ReviewerProfile: pin}, &result)
+				} else {
+					var resolved agentcfg.ReviewerProfile
+					callErr = client.Call(ipc.MethodResolveReviewerProfile, &ipc.ResolveReviewerProfileParams{RepoID: repo.ID, ReviewerProfile: pin}, &resolved)
+					if callErr == nil && resolved != *pin {
+						t.Fatalf("resolution changed pin: %+v", resolved)
+					}
+				}
+				if tc.wantErr == "" && callErr != nil || tc.wantErr != "" && (callErr == nil || !strings.Contains(callErr.Error(), tc.wantErr)) {
+					t.Fatalf("admission=%t: %v, want %q", admission, callErr, tc.wantErr)
+				}
+			}
+			if after := gitOutput(t, p.RepoDir(repo.ID), "show-ref"); after != before {
+				t.Fatalf("reviewer preflight changed refs: before=%s after=%s", before, after)
+			}
+			runs, err := d.GetRunsByRepo(repo.ID)
+			if err != nil || len(runs) != 0 {
+				t.Fatalf("reviewer preflight created runs: %+v %v", runs, err)
+			}
+		})
+	}
+}

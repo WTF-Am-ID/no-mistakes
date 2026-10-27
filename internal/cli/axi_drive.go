@@ -399,7 +399,7 @@ func runAxiRunWithLaunchProof(cmd *cobra.Command, autoYes bool, skipSteps []type
 		return emitError(cmd, 2, "--verification-plan is accepted only when starting a new run; omit it to reattach")
 	}
 	if runID == "" {
-		resolvedReviewer, resolveErr := resolveReviewer(env.client, reviewer)
+		resolvedReviewer, resolveErr := resolveReviewer(env.client, env.repo.ID, reviewer)
 		if resolveErr != nil {
 			return emitError(cmd, 2, resolveErr.Error())
 		}
@@ -867,6 +867,7 @@ func triggerRun(ctx context.Context, env *axiEnv, branch string, skipSteps []typ
 	var rr ipc.RerunResult
 	params := rerunParams(env.repo.ID, branch, skipSteps, intent, baseBranch)
 	params.OmitIntent = omitIntent
+	params.FreshLaunch = true
 	params.PiProfile = profile
 	params.ReviewerProfile = agentcfg.OptionalReviewerProfile(profiles)
 	params.ClosingIssueRefs = closesIssues
