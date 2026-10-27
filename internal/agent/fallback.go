@@ -12,20 +12,32 @@ import (
 )
 
 type fallbackAgent struct {
-	agents       []Agent
-	quotaSwitch  bool
-	position     atomic.Int64
-	freshSession atomic.Bool
+	agents            []Agent
+	quotaSwitch       bool
+	position          atomic.Int64
+	freshSession      atomic.Bool
+	reviewerQuotaOnly bool
+	exhausted         atomic.Bool
 }
 
 // FallbackOption customizes a fallback chain.
 type FallbackOption func(*fallbackAgent)
 
+// WithReviewerQuotaFallback enables an operator-owned reviewer chain. Unlike
+// general fallback, it advances only on recognized quota exhaustion and never
+// retries an exhausted chain or changes the run's primary quota-routing record.
+func WithReviewerQuotaFallback() FallbackOption {
+	return func(f *fallbackAgent) {
+		f.quotaSwitch = true
+		f.reviewerQuotaOnly = true
+	}
+}
+
 // WithQuotaSwitch activates the quota-aware mid-run switch: a recognised
 // quota-exhaustion error moves the run to the next agent in the chosen order
-// with a fresh session. Only quota routing turns this on; the plain launch
-// fallback never consumes a quota failure, preserving today's behavior when
-// the feature is off.
+// with a fresh session. Quota routing uses this option; dedicated reviewer
+// chains opt in separately. The plain launch fallback never consumes a quota
+// failure, preserving today's behavior when the feature is off.
 func WithQuotaSwitch(start string) FallbackOption {
 	return func(f *fallbackAgent) {
 		f.quotaSwitch = true
@@ -103,6 +115,9 @@ func (a *fallbackAgent) NeutralizesGateInstructions() bool {
 }
 
 func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, err error) {
+	if a.reviewerQuotaOnly && a.exhausted.Load() {
+		return nil, fmt.Errorf("all explicitly configured reviewers exhausted their quota")
+	}
 	var schemaErr error
 	defer func() {
 		if err != nil && schemaErr != nil && !errors.Is(err, schemaErr) {
@@ -191,6 +206,10 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, 
 			return result, err
 		}
 		if i == len(candidates)-1 {
+			if a.reviewerQuotaOnly && quotaExhausted {
+				a.exhausted.Store(true)
+				return result, fmt.Errorf("all explicitly configured reviewers exhausted their quota: %w", err)
+			}
 			return result, err
 		}
 		if quotaExhausted {
@@ -201,11 +220,15 @@ func (a *fallbackAgent) Run(ctx context.Context, opts RunOpts) (result *Result, 
 					break
 				}
 			}
-			emitAgentQuotaSwitch(opts, current.Name(), next.Name(), err)
+			if a.reviewerQuotaOnly {
+				emitAgentFallback(opts, current.Name(), next.Name(), err)
+			} else {
+				emitAgentQuotaSwitch(opts, current.Name(), next.Name(), err)
+			}
 			sessionDropped = true
 			continue
 		}
-		if isAgentUnavailableError(err) {
+		if !a.reviewerQuotaOnly && isAgentUnavailableError(err) {
 			next := candidates[i+1]
 			emitAgentFallback(opts, current.Name(), next.Name(), err)
 			continue

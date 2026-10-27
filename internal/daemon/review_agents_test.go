@@ -77,6 +77,52 @@ func TestPipelineReviewRoleFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPipelineReviewerFallsBackOnInvocationQuota(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "pi")
+	const response = `{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"reviewed"}]}]}`
+	script := "#!/bin/sh\ncat >/dev/null\ncase \"$*\" in *'--model exhausted'*) echo 'quota exceeded' >&2; exit 1;; esac\nprintf '%s\\n' '" + response + "'\n"
+	if runtime.GOOS == "windows" {
+		bin += ".cmd"
+		script = "@echo off\r\nmore > nul\r\necho %* | findstr /C:\"--model exhausted\" > nul\r\nif not errorlevel 1 (\r\necho quota exceeded 1>&2\r\nexit /b 1\r\n)\r\necho " + response + "\r\n"
+	}
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	global, err := config.LoadGlobalFromBytes([]byte(`agent: pi
+review_agents:
+  reviewer:
+    agent: pi
+    model: exhausted
+    fallback:
+      - {agent: pi, model: available}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Merge(global, &config.RepoConfig{})
+	cfg.AgentPathOverride = map[string]string{"pi": bin}
+	cfg.DisableProjectSettings = true
+	ag, _, err := newPipelineAgent(context.Background(), cfg, t.TempDir(), fakeLookPath, runenv.Overlay{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ag.Close()
+	var attempts []agent.Attempt
+	for _, purpose := range []string{"review", "review-coverage"} {
+		result, err := ag.Run(context.Background(), agent.RunOpts{
+			Purpose: purpose, Prompt: "review", CWD: dir,
+			OnAttempt: func(attempt agent.Attempt) { attempts = append(attempts, attempt) },
+		})
+		if err != nil || result == nil || result.Text != "reviewed" {
+			t.Fatalf("%s result = %+v, error = %v", purpose, result, err)
+		}
+	}
+	if len(attempts) != 3 || attempts[0].Err == nil || attempts[1].Err != nil || attempts[2].Err != nil {
+		t.Fatalf("attempts = %+v, want one quota refusal followed by two successful reviews", attempts)
+	}
+}
+
 // reviewRoleProbeStep drives one review turn and one review-fix turn through the
 // pipeline agent the executor was given, so a test can observe which harness
 // profile each role resolved to. Sessions are deliberately not used: pi requires

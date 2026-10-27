@@ -395,6 +395,29 @@ empty. Nonempty role values override that profile, but native
 `agent_args_override` flags still win. Model availability, credentials, and
 supported effort levels remain the harness/provider's responsibility.
 
+Reviewer roles (`reviewer` and `reviewer_after_round`) also accept an ordered,
+explicit `fallback` list. Each entry requires `agent` and accepts `model` and
+`effort` with the same inheritance and native-argument precedence as the role:
+
+```yaml
+review_agents:
+  reviewer:
+    agent: codex
+    fallback:
+      - {agent: pi, model: openai-codex/gpt-5.4, effort: high}
+```
+
+Only recognized invocation-time provider quota exhaustion advances this list.
+Launch errors, transient failures, invalid review output, timeouts and cancellation
+do not. Each replacement receives the complete review prompt without a session,
+inside the invocation's existing timeout. Subsequent review and coverage turns
+stay on the selected reviewer rather than retrying exhausted candidates. If all
+configured reviewers exhaust their quota, review fails without approval. Attempts
+and the selected provider use the existing invocation records and fallback log.
+These candidates are independent reviewer instances and never fall back to the
+writer or fixer implicitly. `fallback` is global-only, does not use quota routing,
+and accepts neither nested fallback lists nor `after_round`; fixer roles reject it.
+
 #### Later-round role overrides
 
 `reviewer_after_round` and `fixer_after_round` are opt-in overlays for long
