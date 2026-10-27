@@ -142,6 +142,9 @@ no-mistakes axi run --intent "the user's goal" --closes 95 --closes owner/repo#1
 | `--closes` | `string`, repeatable | (none) | Issue the PR fully resolves (`95`, `owner/repo#95`, or a nested GitLab project path); see [Closing issues](#closing-issues) |
 | `--model` | `string` | (none) | Pi provider/model ID for an immutable [per-run profile](/no-mistakes/reference/global-config/#per-run-pi-profiles) |
 | `--effort` | `string` | (none) | Pi reasoning effort for that profile; omitted fields inherit `agent_config.pi` |
+| `--reviewer` | `string` | (none) | Independent immutable [reviewer harness](/no-mistakes/reference/global-config/#per-run-reviewer-profiles) |
+| `--reviewer-model` | `string` | (none) | Reviewer model; requires `--reviewer`, defaults to its `agent_config` profile |
+| `--reviewer-effort` | `string` | (none) | Reviewer effort; requires `--reviewer`, defaults to its `agent_config` profile |
 | `--wait`        | `duration` | `8m`    | Maximum time for active-run lookup and run driving before the caller must reattach |
 | `--launch-nonce` | `string` | (none) | Non-secret correlation identifier for a durable pre-drive receipt; requires `--validation-generation` |
 | `--validation-generation` | `string` | (none) | Caller-selected validation generation bound to `--launch-nonce`; requires that flag |
@@ -667,6 +670,9 @@ failed step instead of repeating every completed step.
 | `--closes` | `string`, repeatable | (none) | Issue the PR fully resolves; adds to the [closing references](#closing-issues) inherited from the selected prior run |
 | `--model` | `string` | (none) | Pi provider/model ID for an immutable [per-run profile](/no-mistakes/reference/global-config/#per-run-pi-profiles) |
 | `--effort` | `string` | (none) | Pi reasoning effort for that profile; omitted fields inherit `agent_config.pi` |
+| `--reviewer` | `string` | inherited | Reviewer harness for the new run; omission inherits the previous run's resolved reviewer pin |
+| `--reviewer-model` | `string` | (none) | Reviewer model; requires `--reviewer`, defaults to its `agent_config` profile |
+| `--reviewer-effort` | `string` | (none) | Reviewer effort; requires `--reviewer`, defaults to its `agent_config` profile |
 
 ## no-mistakes sync
 

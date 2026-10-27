@@ -308,6 +308,39 @@ agent_args_override:
     - o3
 ```
 
+### Per-run reviewer profiles
+
+Choose a reviewer independently of the primary author/fixer:
+
+```sh
+no-mistakes axi run --intent "the user's goal" \
+  --reviewer codex --reviewer-model gpt-5.4 --reviewer-effort high
+```
+
+`--reviewer` requires an explicit harness. Omitted model and effort fields
+inherit `agent_config` for that harness, and both must resolve before launch.
+Unsupported tuning, unavailable binaries, and raw `agent_args_override` for
+the selected reviewer harness are refused before an active run is cancelled.
+Model availability and authentication remain the harness's responsibility.
+
+The resolved harness, model and effort are stored atomically in
+`runs.reviewer_profile` and cannot be replaced or cleared. They override
+`review_agents.reviewer`, `reviewer_after_round`, and the reviewer portion of a
+Pi run pin. The primary and fixer keep their existing selection. Each run has
+its own pin, so concurrent runs can choose different reviewers. Later global
+profiles, raw arguments and reviewer routing cannot replace it during recovery.
+Trusted instruction-suppression policy still applies, and a missing reviewer
+fails closed rather than falling back to the primary.
+
+Omit the reviewer flags to reattach. Explicit selections must match the stored
+pin, including on nonce replay and receipt claims. Retries preserve the pin and
+retain the ordinary retry configuration checks. `rerun` inherits the resolved
+reviewer unless `--reviewer` explicitly selects a replacement for the new run.
+A fresh `axi run` without reviewer flags retains the existing global behavior.
+`axi status` reports `reviewer_profile`; `stats --run <id>` reports the requested
+reviewer beside the primary Pi pin, when present, and served invocation evidence
+for both roles. This does not infer model families or select a fallback reviewer.
+
 ### Per-run Pi profiles
 
 Select a profile when creating a validation run, without editing global config:
@@ -326,9 +359,11 @@ Availability, authentication, and model-specific reasoning support remain Pi's
 responsibility. For optional quota evidence at run start, see
 [quota-aware routing](#quota_routing).
 
-A pin applies to **every pipeline duty**, including reviewer and fixer roles.
+A pin applies to **every pipeline duty**, including reviewer and fixer roles,
+unless an explicit per-run reviewer profile overrides the reviewer.
 The effective agent selection must be Pi-only (no `auto`, non-Pi fallbacks, or
-non-Pi `review_agents`). Under the default trust policy, a nonempty `agent` in
+non-Pi `review_agents`, except reviewer entries replaced by an explicit per-run
+reviewer). Under the default trust policy, a nonempty `agent` in
 the freshly fetched, trusted default-branch `.no-mistakes.yaml` replaces the
 global scalar or fallback list for this check, just as it does for an ordinary
 run. This lets one project opt into Pi profiles with trusted `agent: pi` while
