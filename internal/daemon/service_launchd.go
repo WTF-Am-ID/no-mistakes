@@ -186,11 +186,11 @@ func launchdDomainTarget() (string, error) {
 // (preferring the on-disk definition when the live environment has none) and
 // pass it in.
 func renderLaunchAgent(exe string, p *paths.Paths, home string) string {
-	return renderLaunchAgentWithProxyEnv(exe, p, home, serviceProxyEnv())
+	return renderLaunchAgentWithProxyEnv(exe, p, home, serviceEnv(nil))
 }
 
-// renderLaunchAgentWithProxyEnv renders the launchd plist using a proxy
-// environment supplied by the caller (see serviceProxyEnv).
+// renderLaunchAgentWithProxyEnv renders the launchd plist using the forwarded
+// proxy and telemetry environment supplied by the caller (see serviceEnv).
 func renderLaunchAgentWithProxyEnv(exe string, p *paths.Paths, home string, proxyEnv [][2]string) string {
 	values := []string{exe, "daemon", "run", "--root", p.Root()}
 	var args strings.Builder

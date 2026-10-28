@@ -120,7 +120,11 @@ func isProxyEnvKey(key string) bool {
 	return false
 }
 
-// systemdUnitProxyEnv extracts the forwarded proxy `Environment=` entries from a
+func isServiceEnvKey(key string) bool {
+	return key == "NO_MISTAKES_TELEMETRY" || isProxyEnvKey(key)
+}
+
+// systemdUnitProxyEnv extracts the forwarded proxy and telemetry `Environment=` entries from a
 // rendered systemd unit, mirroring systemdUnitExecutable. Entries are returned
 // in file order with systemd's `%` -> `%%` doubling undone, so feeding the
 // result back through renderSystemdUnitWithProxyEnv reproduces the unit
@@ -143,7 +147,7 @@ func systemdUnitProxyEnv(data []byte) [][2]string {
 		// contain %, so undoing before the split is safe.
 		assignment = strings.ReplaceAll(assignment, "%%", "%")
 		key, value, ok := strings.Cut(assignment, "=")
-		if !ok || !isProxyEnvKey(key) {
+		if !ok || !isServiceEnvKey(key) {
 			continue
 		}
 		out = append(out, [2]string{key, value})
@@ -151,7 +155,7 @@ func systemdUnitProxyEnv(data []byte) [][2]string {
 	return out
 }
 
-// launchAgentProxyEnv extracts the forwarded proxy entries from the
+// launchAgentProxyEnv extracts the forwarded proxy and telemetry entries from the
 // EnvironmentVariables <dict> of a rendered launchd plist, mirroring
 // launchAgentExecutable. Pairs are returned in file order with XML escaping
 // undone by the decoder; the fixed HOME/PATH keys are skipped. Feeding the
@@ -197,7 +201,7 @@ func launchAgentProxyEnv(data []byte) [][2]string {
 				if err := decoder.DecodeElement(&value, &t); err != nil {
 					return out
 				}
-				if isProxyEnvKey(pendingKey) {
+				if isServiceEnvKey(pendingKey) {
 					out = append(out, [2]string{pendingKey, value})
 				}
 				havePendingKey = false

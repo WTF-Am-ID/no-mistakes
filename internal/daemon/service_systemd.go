@@ -93,11 +93,11 @@ func legacySystemdUserServicePath() string {
 // (preferring the on-disk definition when the live environment has none) and
 // pass it in.
 func renderSystemdUnit(exe string, p *paths.Paths, home string) string {
-	return renderSystemdUnitWithProxyEnv(exe, p, home, serviceProxyEnv())
+	return renderSystemdUnitWithProxyEnv(exe, p, home, serviceEnv(nil))
 }
 
-// renderSystemdUnitWithProxyEnv renders the systemd unit using a proxy
-// environment supplied by the caller (see serviceProxyEnv).
+// renderSystemdUnitWithProxyEnv renders the systemd unit using the forwarded
+// proxy and telemetry environment supplied by the caller (see serviceEnv).
 func renderSystemdUnitWithProxyEnv(exe string, p *paths.Paths, home string, proxyEnv [][2]string) string {
 	command := strings.Join([]string{
 		systemdEscapeArg(exe),
