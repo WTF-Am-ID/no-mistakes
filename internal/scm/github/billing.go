@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -41,12 +42,27 @@ func (h *Host) markBillingFailures(ctx context.Context, checks []scm.Check, head
 		}
 		// The job API binds the Actions job to its check run. Never read an
 		// arbitrary URL from provider output, or borrow a same-named job's data.
-		prefix := "https://api.github.com/repos/" + h.repoSlug() + "/check-runs/"
-		if h.host != "" && h.host != "github.com" {
-			prefix = "https://" + h.host + "/api/v3/repos/" + h.repoSlug() + "/check-runs/"
+		apiHost := normalizeGitHubHost(h.host)
+		prefix := "/repos/"
+		switch {
+		case apiHost == "" || apiHost == "github.com":
+			apiHost = "api.github.com"
+		case strings.HasSuffix(apiHost, ".ghe.com"):
+			apiHost = "api." + apiHost
+		default:
+			prefix = "/api/v3/repos/"
 		}
-		checkID := strings.TrimPrefix(job.CheckRunURL, prefix)
-		if !strings.HasPrefix(job.CheckRunURL, prefix) || !isNumericID(checkID) || check.ProviderID != "" && check.ProviderID != "github-check-run:"+checkID {
+		checkURL, err := url.Parse(job.CheckRunURL)
+		if err != nil || checkURL.Scheme != "https" || !strings.EqualFold(checkURL.Host, apiHost) ||
+			checkURL.User != nil || checkURL.RawQuery != "" || checkURL.ForceQuery || checkURL.Fragment != "" || !strings.HasPrefix(checkURL.Path, prefix) {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(checkURL.Path, prefix), "/")
+		if len(parts) != 4 || !strings.EqualFold(parts[0]+"/"+parts[1], h.repoSlug()) || parts[2] != "check-runs" || !isNumericID(parts[3]) {
+			continue
+		}
+		checkID := parts[3]
+		if check.ProviderID != "" && check.ProviderID != "github-check-run:"+checkID {
 			continue
 		}
 		var pages [][]struct {

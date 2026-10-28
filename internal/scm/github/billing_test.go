@@ -105,6 +105,79 @@ func TestBillingFailuresNeverBorrowSameNamedJobEvidence(t *testing.T) {
 	}
 }
 
+func TestBillingFailuresCheckRunURLIdentity(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		host string
+		repo string
+		url  string
+		want bool
+	}{
+		{name: "canonical repository casing", repo: "TEST/REPO", url: "https://api.github.com/repos/test/repo/check-runs/22", want: true},
+		{name: "response repository casing", repo: "test/repo", url: "https://api.github.com/repos/TEST/REPO/check-runs/22", want: true},
+		{name: "explicit public host", host: "github.com", repo: "TEST/REPO", url: "https://api.github.com/repos/test/repo/check-runs/22", want: true},
+		{name: "public host casing", host: "GITHUB.COM", repo: "TEST/REPO", url: "https://API.GITHUB.COM/repos/test/repo/check-runs/22", want: true},
+		{name: "enterprise cloud", host: "contoso.ghe.com", repo: "contoso.ghe.com/TEST/REPO", url: "https://api.contoso.ghe.com/repos/test/repo/check-runs/22", want: true},
+		{name: "enterprise cloud casing", host: "CONTOSO.GHE.COM", repo: "contoso.ghe.com/TEST/REPO", url: "https://API.CONTOSO.GHE.COM/repos/test/repo/check-runs/22", want: true},
+		{name: "enterprise server", host: "github.example.com", repo: "github.example.com/TEST/REPO", url: "https://github.example.com/api/v3/repos/test/repo/check-runs/22", want: true},
+		{name: "enterprise server casing", host: "GITHUB.EXAMPLE.COM", repo: "github.example.com/test/repo", url: "https://GITHUB.EXAMPLE.COM/api/v3/repos/TEST/REPO/check-runs/22", want: true},
+		{name: "cloud browser origin", host: "contoso.ghe.com", repo: "test/repo", url: "https://contoso.ghe.com/api/v3/repos/test/repo/check-runs/22"},
+		{name: "another cloud tenant", host: "contoso.ghe.com", repo: "test/repo", url: "https://api.other.ghe.com/repos/test/repo/check-runs/22"},
+		{name: "cloud server API path", host: "contoso.ghe.com", repo: "test/repo", url: "https://api.contoso.ghe.com/api/v3/repos/test/repo/check-runs/22"},
+		{name: "server cloud API origin", host: "github.example.com", repo: "test/repo", url: "https://api.github.example.com/repos/test/repo/check-runs/22"},
+		{name: "server missing API prefix", host: "github.example.com", repo: "test/repo", url: "https://github.example.com/repos/test/repo/check-runs/22"},
+		{name: "public origin on enterprise", host: "github.example.com", repo: "test/repo", url: "https://api.github.com/repos/test/repo/check-runs/22"},
+		{name: "lookalike origin", repo: "test/repo", url: "https://api.github.com.example.com/repos/test/repo/check-runs/22"},
+		{name: "wrong owner", repo: "TEST/REPO", url: "https://api.github.com/repos/other/repo/check-runs/22"},
+		{name: "wrong repository", repo: "TEST/REPO", url: "https://api.github.com/repos/test/other/check-runs/22"},
+		{name: "wrong check", repo: "TEST/REPO", url: "https://api.github.com/repos/test/repo/check-runs/23"},
+		{name: "insecure scheme", repo: "test/repo", url: "http://api.github.com/repos/test/repo/check-runs/22"},
+		{name: "userinfo", repo: "test/repo", url: "https://user@api.github.com/repos/test/repo/check-runs/22"},
+		{name: "unexpected port", repo: "test/repo", url: "https://api.github.com:8443/repos/test/repo/check-runs/22"},
+		{name: "query", repo: "test/repo", url: "https://api.github.com/repos/test/repo/check-runs/22?other=23"},
+		{name: "fragment", repo: "test/repo", url: "https://api.github.com/repos/test/repo/check-runs/22#23"},
+		{name: "extra path", repo: "test/repo", url: "https://api.github.com/repos/test/repo/check-runs/22/annotations"},
+		{name: "malformed URL", repo: "test/repo", url: "https://api.github.com/repos/test/repo/check-runs/%zz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			slug := tc.repo
+			if parts := strings.Split(slug, "/"); len(parts) == 3 {
+				slug = strings.Join(parts[1:], "/")
+			}
+			payload, err := json.Marshal(map[string]any{
+				"id": 2, "run_id": 1, "head_sha": "head", "status": "completed", "conclusion": "failure",
+				"steps": []any{}, "check_run_url": tc.url,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := "gh api "
+			linkHost := tc.host
+			if tc.host != "" {
+				command += "--hostname " + tc.host + " "
+			} else {
+				linkHost = "github.com"
+			}
+			host := New(githubTestCmdFactory(map[string]githubTestResponse{
+				command + "repos/" + slug + "/actions/jobs/2":                               {stdout: string(payload)},
+				command + "repos/" + slug + "/check-runs/22/annotations --paginate --slurp": {stdout: `[[{"annotation_level":"failure","message":"` + billingRefusalAnnotation + `"}]]`},
+				command + "repos/" + slug + "/check-runs/23/annotations --paginate --slurp": {stdout: `[[{"annotation_level":"failure","message":"` + billingRefusalAnnotation + `"}]]`},
+			}), nil, tc.host, tc.repo)
+			checks := []scm.Check{{ProviderID: "github-check-run:22", Bucket: scm.CheckBucketFail, Kind: scm.CheckKindRun, State: "FAILURE", App: "github-actions", Link: "https://" + linkHost + "/" + strings.ToLower(slug) + "/actions/runs/1/job/2"}}
+			host.markBillingFailures(context.Background(), checks, "head")
+			want := ""
+			if tc.want {
+				want = billingRefusalAnnotation
+			}
+			if checks[0].InfrastructureFailure != want || !checks[0].Failing() || checks[0].State != "FAILURE" || checks[0].PreRunFailure {
+				t.Fatalf("check=%+v, want diagnosis=%q with failure preserved", checks[0], want)
+			}
+		})
+	}
+}
+
 func TestGetChecksRetainsSanitizedBillingEvidenceAndFailure(t *testing.T) {
 	t.Parallel()
 	host := New(githubTestCmdFactory(map[string]githubTestResponse{
