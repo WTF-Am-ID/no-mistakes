@@ -509,6 +509,7 @@ Prose changes only. Do not request test coverage.
 The review step appends only the blocks whose `path` matches at least one changed file, in the order they appear in the file.
 Two entries with the same `path` **and** the same `instructions` are injected once. The same instruction text under two different `path` values is injected once per path, because each block states its own scope. Two entries with the same `path` and different `instructions` are both injected.
 Matching runs against the full changed-file list and is deliberately **not** filtered by `ignore_patterns`: that field is read from the pushed branch, so filtering here would let a contributor drop one of your rules from the review of their own branch.
+Matched paths remain required review coverage even when the pushed branch ignores them, unless the trusted default branch's own `ignore_patterns` also excludes them. Each rendered block lists only its paths in that settled review scope. Review takes the empty-scope shortcut only when neither non-ignored changes nor required instruction-covered paths remain.
 
 Blocks augment the built-in review instructions; they cannot disable them, and a finding the reviewer raises from a block goes through the same severity and action model as any other finding.
 With nothing configured, or nothing matching the change, the review prompt is exactly what it would be without this setting.
