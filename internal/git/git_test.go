@@ -177,6 +177,72 @@ func TestCopyLocalUserIdentity(t *testing.T) {
 	if got := run(t, dst, "git", "config", "--local", "--get", "user.email"); got != "test@test.com" {
 		t.Fatalf("user.email = %q, want %q", got, "test@test.com")
 	}
+	run(t, src, "git", "config", "--local", "--unset", "user.email")
+	run(t, src, "git", "config", "--local", "user.name", "Updated")
+	if err := CopyLocalUserIdentity(ctx, src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, dst, "git", "config", "--local", "--get", "user.name"); got != "Updated" {
+		t.Fatalf("user.name = %q, want Updated", got)
+	}
+	if got := run(t, dst, "git", "config", "--local", "--get", "user.email"); got != "test@test.com" {
+		t.Fatalf("missing source email replaced destination email with %q", got)
+	}
+}
+
+func TestCopyLocalUserIdentityIgnoresUnreadableSiblingMetadata(t *testing.T) {
+	for _, isolated := range []bool{false, true} {
+		name := "shared config"
+		if isolated {
+			name = "worktree config"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			src := initTestRepo(t)
+			bare := filepath.Join(t.TempDir(), "gate.git")
+			if err := InitBare(ctx, bare); err != nil {
+				t.Fatal(err)
+			}
+			run(t, src, "git", "push", bare, "HEAD:refs/heads/main")
+			if isolated {
+				if err := IsolateHooksPath(ctx, bare); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wt := filepath.Join(t.TempDir(), "current")
+			sibling := filepath.Join(t.TempDir(), "previous")
+			for _, dir := range []string{wt, sibling} {
+				if err := WorktreeAdd(ctx, bare, dir, "refs/heads/main"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// An unreadable sibling commondir reproduces the failed Git read
+			// seen during concurrent teardown. Use a directory for a deterministic
+			// read error on every OS, rather than racing an unlink with Git.
+			commonFile := run(t, sibling, "git", "rev-parse", "--git-path", "commondir")
+			if !filepath.IsAbs(commonFile) {
+				commonFile = filepath.Join(sibling, commonFile)
+			}
+			if err := os.Remove(commonFile); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(commonFile, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := CopyLocalUserIdentity(ctx, src, wt); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]string{"user.name": "Test", "user.email": "test@test.com"} {
+				if got := run(t, wt, "git", "config", "--get", key); got != want {
+					t.Errorf("%s = %q, want %q", key, got, want)
+				}
+				shared := run(t, bare, "git", "config", "--local", "--get", "--default", "", key)
+				if isolated && shared != "" || !isolated && shared != want {
+					t.Errorf("shared %s = %q, isolated = %v", key, shared, isolated)
+				}
+			}
+		})
+	}
 }
 
 func TestGetRemoteURLNotFound(t *testing.T) {
