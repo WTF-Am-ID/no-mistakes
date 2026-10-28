@@ -839,6 +839,22 @@ func triggerRun(ctx context.Context, env *axiEnv, branch string, skipSteps []typ
 		if planID != "" && (run.VerificationPlan == nil || run.VerificationPlan.ID != planID) {
 			return "", fmt.Errorf("triggered run has a conflicting verification plan")
 		}
+		// An up-to-date push runs no hook. A delayed earlier hook can win
+		// this lookup, so verify the selected run actually recorded our intent
+		// before treating it as the result of this launch.
+		if intent != "" {
+			stored, err := env.d.GetRun(run.ID)
+			if err != nil {
+				return "", fmt.Errorf("verify triggered run %s intent: %w", run.ID, err)
+			}
+			expected := intent
+			if planID == "" {
+				expected = strings.TrimSpace(expected)
+			}
+			if stored == nil || stored.Intent == nil || *stored.Intent != expected {
+				return "", fmt.Errorf("triggered run %s does not record the supplied intent; refusing to drive it; omit --intent/--intent-file to reattach, or abort it before starting a new run", run.ID)
+			}
+		}
 		return run.ID, nil
 	}
 	if !shouldRerunAfterNoActiveRun(pushErr) {
