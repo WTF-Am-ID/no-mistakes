@@ -55,18 +55,14 @@ func TestReviewerSelectionConcurrentLaunchAndNonceReplay(t *testing.T) {
 		if run.Status != types.RunCompleted || run.ReviewerProfile == nil || *run.ReviewerProfile != *requests[i].ReviewerProfile {
 			t.Fatalf("launch lost selection: %+v", run)
 		}
-	}
-	args, err := os.ReadFile(capture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, model := range []string{"openai/review-a", "openai/review-b", "openai/writer"} {
-		want := 1
-		if model == "openai/writer" {
-			want = 2
+		args, err := os.ReadFile(capture + "." + run.ID)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if got := strings.Count(string(args), "--model "+model+" "); got != want {
-			t.Fatalf("%s invocations=%d want=%d: %s", model, got, want, args)
+		for _, model := range []string{requests[i].ReviewerProfile.Model, "openai/writer"} {
+			if got := strings.Count(string(args), "--model "+model+" "); got != 1 {
+				t.Fatalf("run %s: %s invocations=%d want=1: %s", run.ID, model, got, args)
+			}
 		}
 	}
 	writeConfig("openai/later")
@@ -229,7 +225,7 @@ func TestReviewerSelectionFreshLaunchDoesNotInherit(t *testing.T) {
 			if run.Status != types.RunCompleted || tc.fresh && run.ReviewerProfile != nil || !tc.fresh && (run.ReviewerProfile == nil || *run.ReviewerProfile != *pin) {
 				t.Fatalf("reviewer inheritance: %+v", run)
 			}
-			args, err := os.ReadFile(capture)
+			args, err := os.ReadFile(capture + "." + run.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
