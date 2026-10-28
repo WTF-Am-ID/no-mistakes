@@ -181,6 +181,65 @@ func assertServiceTelemetryTransport(t *testing.T, env map[string]string, enable
 	}
 }
 
+func TestManagedServiceTelemetryStartup(t *testing.T) {
+	for _, platform := range []string{"darwin", "linux"} {
+		for _, value := range []string{"0", "false", "off"} {
+			for _, direction := range []string{"saved_opt_out", "shell_opt_out"} {
+				t.Run(platform+"/"+value+"/"+direction, func(t *testing.T) {
+					defer stubServiceRuntime(t)()
+					runtimeGOOS = platform
+					home := t.TempDir()
+					serviceUserHomeDir = func() (string, error) { return home, nil }
+					serviceCommandRunner = func(string, ...string) ([]byte, error) { return nil, nil }
+					for _, key := range proxyEnvKeys {
+						t.Setenv(key, "")
+					}
+					saved, shell := value, "1"
+					if direction == "shell_opt_out" {
+						saved, shell = "1", value
+					}
+					t.Setenv(serviceTelemetryKey, saved)
+					p := paths.WithRoot(t.TempDir())
+					install := installLaunchAgent
+					path := launchAgentPath(p)
+					if platform == "linux" {
+						install = installSystemdUserService
+						path = systemdUserServicePath(p)
+					}
+					if err := install(p, "/bin/no-mistakes"); err != nil {
+						t.Fatal(err)
+					}
+					// Refresh from the saved definition without an installer env value.
+					t.Setenv(serviceTelemetryKey, "")
+					if err := install(p, "/new/no-mistakes"); err != nil {
+						t.Fatal(err)
+					}
+					definition, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					env := serviceTelemetryEnvironment(t, platform, string(definition))
+					if env[serviceTelemetryKey] != saved {
+						t.Fatalf("refreshed telemetry = %q, want %q", env[serviceTelemetryKey], saved)
+					}
+					env["NM_SERVICE_TELEMETRY_PREPARE"] = "1"
+					env["NM_SERVICE_TELEMETRY_SHELL"] = shell
+					assertServiceTelemetryTransport(t, env, false)
+				})
+			}
+		}
+	}
+	for _, value := range []string{"", "1"} {
+		t.Run("enabled_control/"+value, func(t *testing.T) {
+			assertServiceTelemetryTransport(t, map[string]string{
+				serviceTelemetryKey:            value,
+				"NM_SERVICE_TELEMETRY_PREPARE": "1",
+				"NM_SERVICE_TELEMETRY_SHELL":   "1",
+			}, true)
+		})
+	}
+}
+
 type serviceTelemetryTransport struct{ events atomic.Int32 }
 
 func (r *serviceTelemetryTransport) RoundTrip(*http.Request) (*http.Response, error) {
@@ -194,6 +253,26 @@ func TestManagedServiceTelemetryTransport(t *testing.T) {
 	}
 	transport := &serviceTelemetryTransport{}
 	http.DefaultTransport = transport
+	if os.Getenv("NM_SERVICE_TELEMETRY_PREPARE") == "1" {
+		oldApply := applyShellEnvToProcess
+		defer func() { applyShellEnvToProcess = oldApply }()
+		applied := false
+		applyShellEnvToProcess = func(excluded ...string) error {
+			applied = true
+			for _, key := range excluded {
+				if key == serviceTelemetryKey {
+					return nil
+				}
+			}
+			return os.Setenv(serviceTelemetryKey, os.Getenv("NM_SERVICE_TELEMETRY_SHELL"))
+		}
+		if err := prepareDaemonEnvironment(); err != nil {
+			t.Fatal(err)
+		}
+		if !applied {
+			t.Fatal("startup did not apply the shell environment")
+		}
+	}
 	for _, event := range []string{"run started", "step_completed", "approval", "fix", "run finished"} {
 		telemetry.Track(event, nil)
 	}
