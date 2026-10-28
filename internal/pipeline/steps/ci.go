@@ -765,7 +765,8 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 			// verdict on the code. Re-bucket those into the transient path before
 			// anything reads the failing set, so they are re-run rather than sent
 			// to the fix agent. Gated on the transient budget, so an opted-out
-			// repo pays no extra provider calls and keeps the prior behavior.
+			// repo pays no setup-classification calls. Billing evidence is read
+			// independently by the GitHub adapter.
 			markPreRunInfraFailures(sctx, host, checks)
 			// checksPending is the narrow execution state: only checks that are
 			// actively running or queued block a rerun or issue escalation. A

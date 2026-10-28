@@ -72,8 +72,9 @@ type ciIssues struct {
 // per issue, each carrying the action the executor's shared findings
 // machinery acts on:
 //
-//   - a failing check the provider attributes to the job itself is an
-//     auto-fix error: the repair half fetches its logs by provider identity and the fix
+//   - a proven persistent infrastructure failure is an ask-user error;
+//   - an ordinary failing job check is an auto-fix error: the repair half
+//     fetches its logs by provider identity and the fix
 //     agent, not this classifier, decides whether the code caused it (its
 //     no-code-change conclusion parks for a decision);
 //   - a merge conflict is an auto-fix error whose repair always revalidates;
@@ -90,10 +91,10 @@ type ciIssues struct {
 //     warning, exactly as before findings existed: nothing a fix agent does
 //     can clear it.
 //
-// The classification reads provider structure only - bucket, state, the
-// check suite's app identity - never check names or log text, so it is as
-// trustworthy as the status API behind it. An empty app identity is never a
-// review bot.
+// The classification reads provider evidence: bucket, state, the check suite's
+// app identity and sanitized infrastructure diagnosis. It never reads check
+// names or log text and is as trustworthy as the provider APIs behind it.
+// An empty app identity is never a review bot.
 func ciObservationFindings(issues ciIssues) Findings {
 	var items []Finding
 	codeChecks := 0
