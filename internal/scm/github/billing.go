@@ -12,10 +12,15 @@ import (
 
 const billingRefusalAnnotation = "The job was not started because recent account payments have failed or your spending limit needs to be increased."
 
+type billingEvidenceKey struct {
+	headSHA, runID, jobID, checkID string
+}
+
 // markBillingFailures requires evidence for the exact job, not its name or
 // duration. GitHub supplies no structured billing conclusion, so only its
 // billing annotation together with an explicitly empty step list qualifies.
-// Missing or unreadable evidence leaves the original failure untouched.
+// Missing or unreadable evidence leaves an unproven failure untouched. Once
+// proven, a terminal job's diagnosis is retained for its exact identity.
 func (h *Host) markBillingFailures(ctx context.Context, checks []scm.Check, headSHA string) {
 	for i, check := range checks {
 		if !check.Failing() || check.Kind == scm.CheckKindStatus || check.App != "" && check.App != "github-actions" {
@@ -23,6 +28,14 @@ func (h *Host) markBillingFailures(ctx context.Context, checks []scm.Check, head
 		}
 		runID, jobID, ok := h.actionsRerunTarget(check.Link)
 		if !ok || jobID == "" {
+			continue
+		}
+		key := billingEvidenceKey{headSHA, runID, jobID, check.ProviderID}
+		// Only head-bound checks with a provider identity can reuse evidence.
+		// A later read failure cannot undo a confirmed terminal job refusal.
+		retain := headSHA != "" && check.ProviderID != ""
+		if _, confirmed := h.confirmedBilling.Load(key); retain && confirmed {
+			checks[i].InfrastructureFailure = billingRefusalAnnotation
 			continue
 		}
 		var job struct {
@@ -78,6 +91,9 @@ func (h *Host) markBillingFailures(ctx context.Context, checks []scm.Check, head
 					// Retain only the recognized provider diagnosis. Raw details,
 					// paths and extra annotation prose are not publishable evidence.
 					checks[i].InfrastructureFailure = billingRefusalAnnotation
+					if retain {
+						h.confirmedBilling.Store(key, struct{}{})
+					}
 				}
 			}
 		}

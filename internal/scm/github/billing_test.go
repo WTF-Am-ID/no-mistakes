@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -192,5 +193,68 @@ func TestGetChecksRetainsSanitizedBillingEvidenceAndFailure(t *testing.T) {
 	encoded, err := json.Marshal(checks)
 	if err != nil || strings.Contains(string(encoded), "private-marker") {
 		t.Fatalf("unsanitized evidence: %s err=%v", encoded, err)
+	}
+}
+
+func TestGetChecksRetainsConfirmedBillingEvidenceAcrossPolls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, changedIdentity, failedRead string
+		initiallyUnproven                 bool
+	}{
+		{name: "job read fails", failedRead: "job"},
+		{name: "annotation read fails", failedRead: "annotations"},
+		{name: "different head", changedIdentity: "head", failedRead: "job"},
+		{name: "different run", changedIdentity: "run", failedRead: "job"},
+		{name: "different job", changedIdentity: "job", failedRead: "job"},
+		{name: "different check", changedIdentity: "check", failedRead: "job"},
+		{name: "initial job read fails", failedRead: "job", initiallyUnproven: true},
+		{name: "initial annotation read fails", failedRead: "annotations", initiallyUnproven: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			responses := map[string]githubTestResponse{}
+			host := New(githubTestCmdFactory(responses), nil, "", "test/repo")
+			for poll := 0; poll < 3; poll++ {
+				head, runID, jobID, checkID := "head", 1, 2, 22
+				if poll > 0 {
+					switch tc.changedIdentity {
+					case "head":
+						head = "new-head"
+					case "run":
+						runID = 9
+					case "job":
+						jobID = 3
+					case "check":
+						checkID = 23
+					}
+				}
+				responses["gh pr view 123 --repo test/repo --json headRefOid --jq .headRefOid"] = githubTestResponse{stdout: head}
+				responses[githubCommitChecksCommand("", "test/repo", head)] = githubTestResponse{stdout: githubCommitChecksResponse(fmt.Sprintf(`[{"__typename":"CheckRun","databaseId":%d,"name":"build","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/test/repo/actions/runs/%d/job/%d","checkSuite":{"app":{"slug":"github-actions"}}}]`, checkID, runID, jobID))}
+				responses["gh api --method GET repos/test/repo/actions/runs -f head_sha="+head+" -f per_page=100 --paginate --slurp"] = githubTestResponse{stdout: `[{"total_count":0,"workflow_runs":[]}]`}
+				jobCommand := fmt.Sprintf("gh api repos/test/repo/actions/jobs/%d", jobID)
+				annotationCommand := fmt.Sprintf("gh api repos/test/repo/check-runs/%d/annotations --paginate --slurp", checkID)
+				responses[jobCommand] = githubTestResponse{stdout: fmt.Sprintf(`{"id":%d,"run_id":%d,"head_sha":%q,"status":"completed","conclusion":"failure","steps":[],"check_run_url":"https://api.github.com/repos/test/repo/check-runs/%d"}`, jobID, runID, head, checkID)}
+				responses[annotationCommand] = githubTestResponse{stdout: `[[{"annotation_level":"failure","message":"` + billingRefusalAnnotation + ` private-marker","raw_details":"private-marker"}]]`}
+				if poll > 0 || tc.initiallyUnproven {
+					command := jobCommand
+					if tc.failedRead == "annotations" {
+						command = annotationCommand
+					}
+					responses[command] = githubTestResponse{stderr: "HTTP 403", code: 1}
+				}
+				checks, err := host.GetChecks(context.Background(), &scm.PR{Number: "123", HeadSHA: head})
+				if err != nil || len(checks) != 1 {
+					t.Fatalf("poll %d: checks=%+v err=%v", poll, checks, err)
+				}
+				want := ""
+				if !tc.initiallyUnproven && (poll == 0 || tc.changedIdentity == "") {
+					want = billingRefusalAnnotation
+				}
+				if checks[0].InfrastructureFailure != want || !checks[0].Failing() || checks[0].State != "FAILURE" || checks[0].PreRunFailure {
+					t.Fatalf("poll %d: check=%+v, want diagnosis=%q with failure preserved", poll, checks[0], want)
+				}
+			}
+		})
 	}
 }

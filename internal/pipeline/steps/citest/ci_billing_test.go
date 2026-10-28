@@ -20,10 +20,11 @@ import (
 func TestCIStep_BillingRefusalParksWithoutRepairOrBudgetSpend(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		reruns  int
-		pending bool
-	}{{0, false}, {1, false}, {0, true}} {
-		t.Run(fmt.Sprintf("rerun_budget_%d_pending_%v", tc.reruns, tc.pending), func(t *testing.T) {
+		reruns     int
+		pending    bool
+		failedRead string
+	}{{0, false, ""}, {1, false, ""}, {0, true, ""}, {1, true, "job"}, {1, true, "annotations"}} {
+		t.Run(fmt.Sprintf("rerun_budget_%d_pending_%v_failed_read_%s", tc.reruns, tc.pending, tc.failedRead), func(t *testing.T) {
 			t.Parallel()
 			dir, base, head := stepstest.SetupGitRepo(t)
 			ag := &stepstest.MockAgent{AgentName: "test"}
@@ -47,9 +48,30 @@ func TestCIStep_BillingRefusalParksWithoutRepairOrBudgetSpend(t *testing.T) {
 			sctx.Config.CITimeout = time.Second
 			var logs []string
 			sctx.Log = func(s string) { logs = append(logs, s) }
+			polls := 1
 			step := (&steps.CIStep{}).SetNow(func() time.Time { return current }).SetBaseBranchTip(func(context.Context) (string, bool) { return base, true }).SetWaitForNextPoll(func(context.Context, time.Duration) error {
 				if !tc.pending {
 					t.Fatal("a settled billing refusal must park immediately")
+				}
+				if tc.failedRead != "" {
+					if polls >= 3 {
+						t.Fatal("billing refusal must park when the companion check finishes")
+					}
+					// Poll 2 loses the evidence read while the companion is still
+					// pending. Poll 3 settles it with the evidence still unreadable.
+					for i, value := range sctx.Env {
+						if tc.failedRead == "job" && strings.HasPrefix(value, "FAKE_CLI_ACTIONS_JOB=") {
+							sctx.Env[i] = "FAKE_CLI_ACTIONS_JOB="
+						}
+						if tc.failedRead == "annotations" && strings.HasPrefix(value, "FAKE_CLI_CHECK_ANNOTATIONS=") {
+							sctx.Env[i] = "FAKE_CLI_CHECK_ANNOTATIONS="
+						}
+						if polls == 2 && strings.HasPrefix(value, "FAKE_CLI_CHECKS=") {
+							sctx.Env[i] = "FAKE_CLI_CHECKS=" + strings.ReplaceAll(strings.ReplaceAll(checks, "PENDING", "SUCCESS"), "pending", "pass")
+						}
+					}
+					polls++
+					return nil
 				}
 				current = current.Add(2 * time.Second)
 				return nil
@@ -60,6 +82,9 @@ func TestCIStep_BillingRefusalParksWithoutRepairOrBudgetSpend(t *testing.T) {
 			}
 			if len(ag.Calls) != 0 || sctx.Fixing {
 				t.Fatalf("agent calls=%d fixing=%v, want no repair round despite available budget", len(ag.Calls), sctx.Fixing)
+			}
+			if tc.failedRead != "" && polls != 3 {
+				t.Fatalf("observed %d polls, want confirmed, unreadable/pending, unreadable/settled", polls)
 			}
 			findings, err := types.ParseFindingsJSON(outcome.Findings)
 			if err != nil {

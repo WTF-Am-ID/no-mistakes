@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/scm"
@@ -30,6 +31,9 @@ type Host struct {
 	forkOwner       string // fork owner for cross-repository PR heads
 	requiredReviews []string
 	draft           bool // open created PRs as drafts (gh pr create --draft)
+
+	// confirmedBilling holds proven terminal refusals by billingEvidenceKey.
+	confirmedBilling sync.Map
 	// assetHTTP and assetUploadPrefix override the unofficial user-attachments
 	// upload transport in tests. Production leaves both nil/empty and uses
 	// http.DefaultClient against uploads.github.com (or uploads.<ghec-host>).
