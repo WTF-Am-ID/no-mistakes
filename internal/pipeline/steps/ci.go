@@ -322,7 +322,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 				findings, parseErr := types.ParseFindingsJSON(outcome.Findings)
 				if outcome.Findings == "" || parseErr == nil {
 					// Deferred findings may already contain the previous round's
-					// warning. Replace it with the latest cumulative diagnostic.
+					// diagnostic. Replace it with the latest cumulative count and cause.
 					items := findings.Items[:0]
 					for _, item := range findings.Items {
 						if item.ID != "ci-fix-agent-crashes" {
