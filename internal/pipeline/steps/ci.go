@@ -332,7 +332,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (outcome *pipeline.StepOutc
 					findings.Items = items
 					findings.Items = append(findings.Items, Finding{
 						ID:          "ci-fix-agent-crashes",
-						Severity:    types.FindingSeverityWarning,
+						Severity:    types.FindingSeverityInfo,
 						Action:      types.ActionNoOp,
 						Description: fmt.Sprintf("%d CI fix-agent crashes; last cause: %s", s.fixAgentCrashes, s.lastFixAgentCrash),
 					})
