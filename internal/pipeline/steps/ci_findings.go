@@ -97,10 +97,21 @@ type ciIssues struct {
 func ciObservationFindings(issues ciIssues) Findings {
 	var items []Finding
 	codeChecks := 0
+	infrastructureChecks := 0
 	externalReviews := 0
 	var botChecks []reviewBotCheck
 	bots := scm.ReviewBotsFor(issues.requiredReviews)
 	for _, check := range selectedFailingChecks(issues.checks, issues.failing) {
+		if check.InfrastructureFailure != "" {
+			infrastructureChecks++
+			items = append(items, Finding{
+				Severity: types.FindingSeverityError, Action: types.ActionAskUser,
+				Category: types.FindingCategoryCIInfrastructure,
+				Check:    check.Name, CheckID: check.ProviderID,
+				Description: fmt.Sprintf("CI infrastructure failure: %s. %s Resolve the account billing/spending limit, or request an explicit per-PR local-validation / CI-override exception from the operator. CI remains failing.", ciCheckDescription(check), check.InfrastructureFailure),
+			})
+			continue
+		}
 		bot, known := scm.ReviewBotForCheck(bots, check)
 		if check.ExternalReview != "" && !known {
 			externalReviews++
@@ -150,6 +161,9 @@ func ciObservationFindings(issues ciIssues) Findings {
 	items = append(items, transient...)
 
 	var parts []string
+	if infrastructureChecks > 0 {
+		parts = append(parts, fmt.Sprintf("%d CI infrastructure failures require an operator decision", infrastructureChecks))
+	}
 	if externalReviews > 0 {
 		parts = append(parts, fmt.Sprintf("%d required external reviews incomplete", externalReviews))
 	}
