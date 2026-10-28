@@ -124,14 +124,12 @@ func isServiceEnvKey(key string) bool {
 	return key == "NO_MISTAKES_TELEMETRY" || isProxyEnvKey(key)
 }
 
-// systemdUnitProxyEnv extracts the forwarded proxy and telemetry `Environment=` entries from a
-// rendered systemd unit, mirroring systemdUnitExecutable. Entries are returned
-// in file order with systemd's `%` -> `%%` doubling undone, so feeding the
+// systemdUnitProxyEnv extracts forwarded proxy and telemetry `Environment=`
+// entries from a rendered systemd unit, mirroring systemdUnitExecutable. Entries
+// are returned in file order with systemd's `%` -> `%%` doubling undone, so feeding the
 // result back through renderSystemdUnitWithProxyEnv reproduces the unit
 // byte-for-byte. The fixed HOME/PATH Environment= lines are skipped. This lets
-// drift detection (and a reinstall) inherit a proxy already baked into the
-// on-disk unit when the current shell has no proxy variables exported, instead
-// of silently stripping it. See serviceProxyEnv.
+// drift detection and installation preserve stored values through serviceEnv.
 func systemdUnitProxyEnv(data []byte) [][2]string {
 	var out [][2]string
 	for _, line := range strings.Split(string(data), "\n") {
@@ -160,7 +158,7 @@ func systemdUnitProxyEnv(data []byte) [][2]string {
 // launchAgentExecutable. Pairs are returned in file order with XML escaping
 // undone by the decoder; the fixed HOME/PATH keys are skipped. Feeding the
 // result back through renderLaunchAgentWithProxyEnv reproduces the plist. See
-// serviceProxyEnv.
+// serviceEnv.
 func launchAgentProxyEnv(data []byte) [][2]string {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	var out [][2]string
